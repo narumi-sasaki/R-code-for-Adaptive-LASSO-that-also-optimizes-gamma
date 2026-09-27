@@ -3,6 +3,14 @@
 This guide explains how to smoothly install R packages in a secured corporate network (proxy environment). 
 Please follow these three steps in order, while running the code below in your R console.
 
+If your company prohibits using credentials in proxy URLs (e.g., http://user:password@proxy), 
+or blocks direct outbound connections via proxy, you may be required to install packages 
+exclusively through your company's dedicated private repository (e.g., Artifactory, 
+Posit/RStudio Package Manager).
+
+If this applies to your corporate environment, please SKIP Step 1 entirely and 
+PROCEED DIRECTLY TO "Step 2-2. Set Repository and Timeout Settings" to configure 
+your internal repository address.
 
 ## 【Step 1: Get and Set Proxy Server Information】
 
