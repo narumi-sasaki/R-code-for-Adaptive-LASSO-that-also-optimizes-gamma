@@ -1,12 +1,12 @@
-■ R Package Installation Guide for Beginners: Proxy Setup & Rtools-Free Installation
+# ■ R Package Installation Guide for Beginners: Proxy Setup & Rtools-Free Installation
 
 This guide explains how to smoothly install R packages in a secured corporate network (proxy environment). 
 Please follow these three steps in order, while running the code below in your R console.
 
 
-【Step 1: Get and Set Proxy Server Information】
+## 【Step 1: Get and Set Proxy Server Information】
 
-1-1. Check Proxy Server Information (For Windows Users)
+### 1-1. Check Proxy Server Information (For Windows Users)
 Retrieve the currently configured proxy server address and port from the Windows Registry. 
 
 ```r
@@ -17,7 +17,7 @@ readRegistry("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", 
 The command above is for Windows only. If you are using macOS or Linux, please check your system network settings or ask your IT department to find your proxy server address and port.
 
 
-1-2. Configure Environment Variables
+### 1-2. Configure Environment Variables
 Replace "user_ID:password" and "ooo" (your proxy server address and port) with your actual information, and run the following code.
 
 ```r
@@ -31,7 +31,7 @@ If your password contains special characters such as "@", "/", or "\", you must 
 
 【Step 2: Connection Test and Network Configuration】
 
-2-1. Test the Connection
+### 2-1. Test the Connection
 Verify if you can access external websites through the proxy. Run the following code; if the status code returns "200", your connection is working properly.
 
 ```r
@@ -43,7 +43,7 @@ attr(res, "status")
 If Google is blocked in your country or region (e.g., in China), please replace "http://www.google.com/" with a locally accessible major website (e.g., "http://www.baidu.com/").
 
 
-2-2. Set Repository and Timeout Settings
+### 2-2. Set Repository and Timeout Settings
 Start a fresh R session and run the following commands. This resets your connection target to the global CRAN cloud (via CDN) and extends the network timeout to 10 minutes (600 seconds) to handle slow connections.
 
 ```r
@@ -58,16 +58,16 @@ Depending on your corporate infrastructure restrictions, you may need to specify
 If the global CRAN cloud is unstable or blocked by your corporate firewall, you can replace the URL with a reliable local CRAN mirror located in your country or your company's private repository.
 
 
-【Step 3: Install Packages Specifying Binary Format】
+## 【Step 3: Install Packages Specifying Binary Format】
 
-3-1. Install the Package
+### 3-1. Install the Package
 When installing packages, always append 'type = "binary"' to the command. Below is an example using the "gcdnet" package.
 
 ```r
 install.packages("gcdnet", type = "binary")
 ```
 
-■ Why Specifying 'type = "binary"' Is Crucial
+# ■ Why Specifying 'type = "binary"' Is Crucial
 
 - It allows instant installation without requiring a compiler environment (Rtools).
 - In secured corporate networks, attempting to build a package from source code often fails. This is because security restrictions may block the retrieval of additional files required during compilation.
