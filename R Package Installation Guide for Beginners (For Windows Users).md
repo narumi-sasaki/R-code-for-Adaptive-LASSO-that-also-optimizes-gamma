@@ -15,10 +15,17 @@ your internal repository address.
 ## 【Step 1: Get and Set Proxy Server Information】
 
 ### 1-1. Check Proxy Server Information (For Windows Users)
-Retrieve the currently configured proxy server address and port from the Windows Registry. 
+Retrieve the currently configured proxy server address and port from the Windows Registry. Please retrieve your proxy server address and port from either proxy$ProxyServer or proxy$AutoConfigURL.
+If the curl package is available, run the following command and use the returned proxy address and port:
+　curl::ie_get_proxy_for_url("https://cloud.r-project.org/")
 
 ```r
-readRegistry("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings", "HCU")$ProxyServer
+proxy <- utils::readRegistry(
+  "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+  hive = "HCU"
+)
+
+proxy[c("ProxyEnable", "ProxyServer", "ProxyOverride", "AutoConfigURL")]
 ```
 
 *Note for macOS/Linux Users:
@@ -26,7 +33,7 @@ The command above is for Windows only. If you are using macOS or Linux, please c
 
 
 ### 1-2. Configure Environment Variables
-Replace "user_ID:password" and "ooo" (your proxy server address and port) with your actual information, and run the following code.
+Replace "user_ID:password" and "ooo" (your proxy server address and port) with your actual information, and run the following code. In place of 'ooo', please input either the socket address or the URL (excluding the 'http://' prefix).
 
 ```r
 Sys.setenv(http_proxy  = "http://user_ID:password@ooo")
@@ -43,13 +50,9 @@ If your password contains special characters such as "@", "/", or "\", you must 
 Verify if you can access external websites through the proxy. Run the following code; if the status code returns "200", your connection is working properly.
 
 ```r
-res <- curlGetHeaders("http://www.google.com/")
+res <- curlGetHeaders("https://cloud.r-project.org/")
 attr(res, "status")
 ```
-
-*Note for Specific Regions:
-If Google is blocked in your country or region (e.g., in China), please replace "http://www.google.com/" with a locally accessible major website (e.g., "http://www.baidu.com/").
-
 
 ### 2-2. Set Repository and Timeout Settings
 Start a fresh R session and run the following commands. This resets your connection target to the global CRAN cloud (via CDN) and extends the network timeout to 10 minutes (600 seconds) to handle slow connections.
