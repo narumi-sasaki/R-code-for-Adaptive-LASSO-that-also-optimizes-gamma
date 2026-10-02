@@ -16,7 +16,7 @@ your internal repository address.
 
 ### 1-1. Check Proxy Server Information (For Windows Users)
 Retrieve the currently configured proxy server address and port from the Windows Registry. Please retrieve your proxy server address and port from either proxy$ProxyServer or proxy$AutoConfigURL.
-If the curl package is available, run the following command and use the returned proxy address and port:
+If the curl package is available, use the proxy address and port returned by the following command instead:
 　curl::ie_get_proxy_for_url("https://cloud.r-project.org/")
 
 ```r
