@@ -7,6 +7,8 @@ library(bbotk)
 library(mlr3)
 library(mlr3mbo)
 library(mlr3learners)
+library(lhs)
+library(DiceKriging)
 
 ############################################################
 # 1. Load data
@@ -32,40 +34,62 @@ gcdCV <- function(funX, loglambda1, loglambda2, funpf) {
   mean(
     foreach(
       i         = seq_len(n_folds),
-      .export   = c("funX", "funpf", "foldid", "n_folds", "Y",
-                    "loglambda1", "loglambda2"),
+      .export   = c(
+        "funX", "funpf", "foldid", "n_folds", "Y",
+        "loglambda1", "loglambda2"
+      ),
       .packages = "gcdnet",
       .combine  = "c"
     ) %do% {
       train_idx <- foldid != i
       valid_idx <- !train_idx
       
-      fit <- gcdnet(
-        funX[train_idx, ], Y[train_idx],
-        lambda    = 10 ^ loglambda1,
-        lambda2   = 10 ^ loglambda2,
-        pf        = funpf,
-        method    = "ls"
+      fit <- gcdnet::gcdnet(
+        x       = funX[train_idx, , drop = FALSE],
+        y       = as.numeric(Y[train_idx, 1]),
+        lambda  = 10 ^ loglambda1,
+        lambda2 = 10 ^ loglambda2,
+        pf      = funpf,
+        method  = "ls"
       )
       
-      ypred <- predict(fit, funX[valid_idx, , drop = FALSE])
-      mean((ypred - Y[valid_idx]) ^ 2)
+      ypred <- gcdnet::predict(
+        fit,
+        newx = funX[valid_idx, , drop = FALSE],
+        type = "link"
+      )
+      
+      mean(
+        (as.numeric(ypred) - as.numeric(Y[valid_idx, 1])) ^ 2
+      )
     }
   )
 }
 
 # For Adaptive Lasso (lambda2 fixed at 0, BIC criterion)
 AlassoBIC <- function(funX, loglambda1, funpf) {
-  fit   <- gcdnet(
-    funX, Y,
+  fit <- gcdnet::gcdnet(
+    x       = funX,
+    y       = as.numeric(Y[, 1]),
     lambda  = 10 ^ loglambda1,
     lambda2 = 0,
     pf      = funpf,
     method  = "ls"
   )
-  devsq <- sum((predict(fit, funX) - Y) ^ 2)
-  BIC   <- n_obs * (log(2 * pi * devsq / n_obs) + 1) +
+  
+  ypred <- gcdnet::predict(
+    fit,
+    newx = funX,
+    type = "link"
+  )
+  
+  devsq <- sum(
+    (as.numeric(ypred) - as.numeric(Y[, 1])) ^ 2
+  )
+  
+  BIC <- n_obs * (log(2 * pi * devsq / n_obs) + 1) +
     log(n_obs) * (sum(fit$beta[, 1] != 0) + 1)
+  
   return(BIC)
 }
 
