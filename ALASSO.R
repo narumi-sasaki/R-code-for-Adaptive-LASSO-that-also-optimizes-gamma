@@ -1,250 +1,101 @@
-############################################################
-# Load packages
-############################################################
 library(gcdnet)
-library(foreach)
-library(bbotk)
-library(mlr3)
-library(mlr3mbo)
-library(mlr3learners)
-library(lhs)
-library(DiceKriging)
 
 ############################################################
 # 1. Load data
 ############################################################
 df_yX <- read.csv("train_data.csv", stringsAsFactors = FALSE)
-Y     <- as.matrix(df_yX[,  1, drop = FALSE])  # Response
-X     <- as.matrix(df_yX[, -1])                # Factors including higher-order terms
+y     <- as.numeric(df_yX[, 1])      # Response
+X     <- as.matrix(df_yX[, -1])      # Factors including higher-order terms
 n_obs <- nrow(X)
 
 ############################################################
-# 2. Cross-validation indices (for Elastic Net LOOCV)
+# 2. Search grids
 ############################################################
-set.seed(0)
-n_folds <- n_obs
-foldid  <- sample(seq_len(n_folds))  # One fold per observation (LOOCV)
+lambda2_grid <- c(0, 10 ^ seq(-4, 1, by = 0.1))   # Elastic Net lambda2
+gamma_grid   <- seq(0.5, 3, by = 0.25)            # Adaptive Lasso gamma
+tie_tol      <- 1e-8                              # tolerance for ties
 
-############################################################
-# 3. Function definitions
-############################################################
-
-# For Elastic Net (both lambda1 and lambda2 are cross-validated)
-gcdCV <- function(funX, loglambda1, loglambda2, funpf) {
-  mean(
-    foreach(
-      i         = seq_len(n_folds),
-      .export   = c(
-        "funX", "funpf", "foldid", "n_folds", "Y",
-        "loglambda1", "loglambda2"
-      ),
-      .packages = "gcdnet",
-      .combine  = "c"
-    ) %do% {
-      train_idx <- foldid != i
-      valid_idx <- !train_idx
-      
-      fit <- gcdnet::gcdnet(
-        x       = funX[train_idx, , drop = FALSE],
-        y       = as.numeric(Y[train_idx, 1]),
-        lambda  = 10 ^ loglambda1,
-        lambda2 = 10 ^ loglambda2,
-        pf      = funpf,
-        method  = "ls"
-      )
-      
-      ypred <- gcdnet::predict(
-        fit,
-        newx = funX[valid_idx, , drop = FALSE],
-        type = "link"
-      )
-      
-      mean(
-        (as.numeric(ypred) - as.numeric(Y[valid_idx, 1])) ^ 2
-      )
-    }
-  )
-}
-
-# For Adaptive Lasso (lambda2 fixed at 0, BIC criterion)
-AlassoBIC <- function(funX, loglambda1, funpf) {
-  fit <- gcdnet::gcdnet(
-    x       = funX,
-    y       = as.numeric(Y[, 1]),
-    lambda  = 10 ^ loglambda1,
-    lambda2 = 0,
-    pf      = funpf,
-    method  = "ls"
-  )
-  
-  ypred <- gcdnet::predict(
-    fit,
-    newx = funX,
-    type = "link"
-  )
-  
-  devsq <- sum(
-    (as.numeric(ypred) - as.numeric(Y[, 1])) ^ 2
-  )
-  
-  BIC <- n_obs * (log(2 * pi * devsq / n_obs) + 1) +
-    log(n_obs) * (sum(fit$beta[, 1] != 0) + 1)
-  
-  return(BIC)
-}
+# lambda1 path of Stage 1: 4 decades below the data-driven maximum
+lambda1_max  <- 2 * max(gcdnet(X, y, method = "ls", lambda2 = 0,
+                               nlambda = 5)$lambda)
+lambda1_grid <- 10 ^ seq(log10(lambda1_max), log10(lambda1_max) - 4,
+                         length.out = 200)
 
 ############################################################
-# 4. Initial estimate via Elastic Net (w_enet)
+# 3. Stage 1: Elastic Net (LOOCV)
 ############################################################
-set.seed(301)
+# LOOCV mean squared error for every (lambda1, lambda2)
+cvm <- sapply(lambda2_grid, function(lambda2) {
+  err <- sapply(seq_len(n_obs), function(i) {
+    fit <- gcdnet(X[-i, , drop = FALSE], y[-i], lambda = lambda1_grid,
+                  lambda2 = lambda2, method = "ls")
+    (as.numeric(predict(fit, newx = X[i, , drop = FALSE])) - y[i]) ^ 2
+  })
+  rowMeans(err)
+})
 
-obfun_enet <- ObjectiveRFun$new(
-  fun = function(xs) {
-    list(
-      y = gcdCV(
-        funX       = X,
-        loglambda1 = xs$loglambda1,
-        loglambda2 = xs$loglambda2,
-        funpf      = rep(1, ncol(X))
-      )
-    )
-  },
-  domain   = ps(
-    loglambda1 = p_dbl(-50, 50),
-    loglambda2 = p_dbl(-50, 50)
-  ),
-  codomain = ps(y = p_dbl(tags = "minimize"))
-)
+# Minimum; ties -> largest lambda1, then largest lambda2
+cand <- which(cvm <= min(cvm) + tie_tol * max(1, abs(min(cvm))),
+              arr.ind = TRUE)
+cand <- cand[order(cand[, 1], -cand[, 2]), , drop = FALSE]
+i1   <- cand[1, 1]
+i2   <- cand[1, 2]
 
-terminator_enet  <- trm("evals", n_evals = 150)
-instance_enet    <- OptimInstanceSingleCrit$new(
-  objective  = obfun_enet,
-  terminator = terminator_enet
-)
+fit_enet  <- gcdnet(X, y, lambda = lambda1_grid,
+                    lambda2 = lambda2_grid[i2], method = "ls")
+beta_enet <- as.numeric(fit_enet$beta[, i1])
 
-design_enet <- generate_design_lhs(obfun_enet$domain, 100)$data
-instance_enet$eval_batch(design_enet)
-
-surrogate_enet <- SurrogateLearner$new(
-  lrn("regr.km", control = list(trace = FALSE))
-)
-acqfun_enet <- AcqFunctionEI$new()
-acqopt_enet <- AcqOptimizer$new(
-  opt("random_search", batch_size = 100),
-  terminator = trm("evals", n_evals = 100)
-)
-
-optimizer_enet <- opt(
-  "mbo",
-  loop_function = bayesopt_ego,
-  surrogate     = surrogate_enet,
-  acq_function  = acqfun_enet,
-  acq_optimizer = acqopt_enet
-)
-
-w_enet <- optimizer_enet$optimize(instance_enet)
-
-w_enet.opt <- gcdnet(
-  X, Y,
-  lambda    = 10 ^ w_enet$loglambda1,
-  lambda2   = 10 ^ w_enet$loglambda2,
-  method    = "ls",
-  intercept = TRUE
-)
-
-# Extract variables with nonzero coefficients
-nonzero_idx <- as.vector(w_enet.opt$beta != 0)
+# Variables with nonzero coefficients
+nonzero_idx <- beta_enet != 0
 newX        <- X[, nonzero_idx, drop = FALSE]
 
-# Standard deviations used for computing weights
-stdev <- apply(X, 2, sd)
+############################################################
+# 4. Stage 2: Adaptive Lasso (BIC)
+############################################################
+all_vars       <- c("(Intercept)", colnames(X))
+AlassoBIC_beta <- setNames(rep(0, length(all_vars)), all_vars)
 
-############################################################
-# 5. Adaptive Lasso (aenet)
-############################################################
 if (sum(nonzero_idx) > 1) {
-  set.seed(301)
-  
-  obfun_alasso <- ObjectiveRFun$new(
-    fun = function(xs) {
-      weights_all     <- (abs(as.numeric(w_enet.opt$beta) * stdev) + 1 / n_obs) ^ (-xs$gamma_ctrl)
-      weights_nonzero <- weights_all[nonzero_idx]
-      list(
-        y = AlassoBIC(
-          funX       = newX,
-          loglambda1 = xs$loglambda1,
-          funpf      = weights_nonzero
-        )
-      )
-    },
-    domain   = ps(
-      loglambda1 = p_dbl(-50,  50),
-      gamma_ctrl = p_dbl(-50, 100)
-    ),
-    codomain = ps(y = p_dbl(tags = "minimize"))
-  )
-  
-  terminator_alasso <- trm("evals", n_evals = 150)
-  instance_alasso   <- OptimInstanceSingleCrit$new(
-    objective  = obfun_alasso,
-    terminator = terminator_alasso
-  )
-  
-  design_alasso <- generate_design_lhs(obfun_alasso$domain, 100)$data
-  instance_alasso$eval_batch(design_alasso)
-  
-  surrogate_alasso <- SurrogateLearner$new(
-    lrn("regr.km", control = list(trace = FALSE))
-  )
-  acqfun_alasso <- AcqFunctionEI$new()
-  acqopt_alasso <- AcqOptimizer$new(
-    opt("random_search", batch_size = 100),
-    terminator = trm("evals", n_evals = 100)
-  )
-  
-  optimizer_alasso <- opt(
-    "mbo",
-    loop_function = bayesopt_ego,
-    surrogate     = surrogate_alasso,
-    acq_function  = acqfun_alasso,
-    acq_optimizer = acqopt_alasso
-  )
-  
-  aenet <- optimizer_alasso$optimize(instance_alasso)
-  
-  # Final model (lambda2 = 0)
-  weights_all     <- (abs(as.numeric(w_enet.opt$beta) * stdev) + 1 / n_obs) ^ (-aenet$gamma_ctrl)
-  weights_nonzero <- weights_all[nonzero_idx]
-  
-  aenet.opt <- gcdnet(
-    newX, Y,
-    lambda    = 10 ^ aenet$loglambda1,
-    lambda2   = 0,
-    method    = "ls",
-    intercept = TRUE,
-    pf        = weights_nonzero
-  )
-  
-  coef_alasso   <- as.matrix(aenet.opt$beta)
-  coef_selected <- t(as.data.frame(coef_alasso))
-  all_vars      <- c("(Intercept)", colnames(X))
-  
-  AlassoBIC_beta                    <- setNames(rep(0, length(all_vars)), all_vars)
-  AlassoBIC_beta["(Intercept)"]     <- aenet.opt$b0
-  AlassoBIC_beta[colnames(coef_selected)] <- coef_selected
-  
+
+  # Base of the adaptive weights (standardized Elastic Net coefficients)
+  base_weight <- (abs(beta_enet * apply(X, 2, sd)) + 1 / n_obs)[nonzero_idx]
+
+  best_bic <- Inf
+  for (gamma in gamma_grid) {
+    pf <- base_weight ^ (-gamma)
+    pf <- pf / mean(pf)
+
+    # lambda1 path, widened according to the spread of the weights
+    lmax    <- 2 * max(gcdnet(newX, y, pf = pf, lambda2 = 0, method = "ls",
+                              nlambda = 5)$lambda)
+    decades <- min(4 + log10(max(pf) / min(pf)), 12)
+    lambda1_path <- 10 ^ seq(log10(lmax), log10(lmax) - decades,
+                             length.out = max(50, ceiling(decades * 50)))
+
+    fit <- gcdnet(newX, y, lambda = lambda1_path, lambda2 = 0,
+                  pf = pf, method = "ls")
+    rss <- colSums((as.matrix(predict(fit, newx = newX)) - y) ^ 2)
+    df  <- colSums(as.matrix(fit$beta) != 0)
+    bic <- n_obs * (log(2 * pi * rss / n_obs) + 1) + log(n_obs) * (df + 1)
+    bic[df > n_obs - 2 | !is.finite(bic)] <- Inf
+
+    # Ties: largest lambda1 within a path, smallest gamma across paths
+    k <- which(bic <= min(bic) + tie_tol * max(1, abs(min(bic))))[1]
+    if (bic[k] < best_bic - tie_tol * max(1, abs(bic[k]))) {
+      best_bic <- bic[k]
+      AlassoBIC_beta["(Intercept)"]  <- fit$b0[k]
+      AlassoBIC_beta[colnames(newX)] <- fit$beta[, k]
+    }
+  }
+
 } else {
-  # If the number of nonzero coefficients is 1 or fewer, use the Elastic Net result as-is
-  all_vars <- c("(Intercept)", colnames(X))
-  
-  AlassoBIC_beta                <- setNames(rep(0, length(all_vars)), all_vars)
-  AlassoBIC_beta["(Intercept)"] <- w_enet.opt$b0
-  AlassoBIC_beta[colnames(X)]   <- as.vector(w_enet.opt$beta)
+  # One or no nonzero coefficient: use the Elastic Net result as-is
+  AlassoBIC_beta["(Intercept)"] <- fit_enet$b0[i1]
+  AlassoBIC_beta[colnames(X)]   <- beta_enet
 }
 
 ############################################################
-# 6. Aggregate and export results
+# 5. Export results
 ############################################################
-data_summary           <- cbind(AlassoBIC = AlassoBIC_beta)
-rownames(data_summary) <- c("(Intercept)", colnames(X))
+data_summary <- cbind(AlassoBIC = AlassoBIC_beta)
 write.csv(data_summary, "ALASSO_summary.csv")
